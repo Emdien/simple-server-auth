@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"net/http"
 	"log"
+	"github.com/Emdien/simple-server-auth/server"
 )
 
 func main() {
@@ -15,8 +16,8 @@ func main() {
 	}
 
 
-	http.HandleFunc("/", handler)
-    log.Fatal(http.ListenAndServe(":8080", nil))
+	srv := server.New(hmacSecret)
+    log.Fatal(http.ListenAndServe(":8088", srv.Routes()))
 	// 1. Define a server with the routes to auth and validate token
 
 	// 2. Implement handlers

@@ -1,6 +1,8 @@
-package main
+package server
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 	"github.com/golang-jwt/jwt/v5"
@@ -11,12 +13,80 @@ type HMACAuthServer struct {
 	hmacSecret []byte
 }
 
+type AuthRequest struct {
+	Username string
+	Password string // ALWAYS use HTTPS. Otherwise this is plain text.
+}
 
+
+func New(hmacSecret []byte) *HMACAuthServer {
+	return &HMACAuthServer{hmacSecret: hmacSecret}
+}
+
+func (s *HMACAuthServer) AuthHandler(w http.ResponseWriter, r *http.Request) {
+	// 1. Read body with Username, HashedPwd 
+
+	var authRq AuthRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&authRq); err != nil {
+		http.Error(w, "Invalid body", http.StatusBadRequest)
+		return
+	}
+
+	// 2. Call PAM functions to auth
+
+	// TODO
+
+	// 3. If auth successful, create a token
+
+	token, err := createToken(s.hmacSecret, authRq.Username, "localhost", time.Hour * 6)
+
+	if err != nil {
+		msg := fmt.Sprintf("Error during token creation: %s", err.Error())
+		http.Error(w, msg, http.StatusInternalServerError)
+		return
+	}
+
+
+	// 4. Return token string
+	w.WriteHeader(http.StatusOK) //		This is default behaviour. But being explicit about it.
+	fmt.Fprintln(w, token)
+
+}
+
+func (s * HMACAuthServer) ValidateTokenHandler(w http.ResponseWriter, r *http.Request) {
+	// 1. Grab token string from header
+
+	authToken := r.Header.Get("Authorization")
+
+	if authToken == "" {
+		http.Error(w, "No Authorization header found", http.StatusUnauthorized)
+		return
+	}
+
+	// 2. Call validateToken function
+
+	_, expired, err := validateTokenString(authToken, s.hmacSecret)
+
+	if err != nil {
+		msg := fmt.Sprintf("Token validation failed with error: %s", err.Error())
+		http.Error(w, msg, http.StatusInternalServerError)
+		return
+	}
+
+	if expired {
+		http.Error(w, "Token is expired. Generate a new one", http.StatusUnauthorized)
+		return
+	}
+	
+	w.WriteHeader(http.StatusOK)
+
+}
 
 // Need to define the following handlers
 
 // 1. An auth handler that receives as a body the user and password
-// The password should be hashed and salted or something, should not be plain.
+// The password should be hashed and salted or something, should not be plain --- NVM, HTTPS duh.
 // This is the core handler of this service. It will rely on PAM functions to perform the auth.
 
 // 2. A token validator. Receives a token string in the body or in an auth header (check for both, prioritize the header)
@@ -33,46 +103,13 @@ type HMACAuthServer struct {
 
 // Might be interesting to look into Traefik to see how it works, since it seems like it integrates well with Docker.
 
-// A pointer to request to not copy the struct on call
-func authHandler(w http.ResponseWriter, r *http.Request) {
-
-	// 1. Read body with Username, HashedPwd 
-
-	// 2. Decode password -> It has to be valid. If not valid somehow, return error. For a simple use case, unhashed.
-
-	// 3. Call PAM functions to auth
-
-	// 4. If auth successful, create a token
-
-	// 5. Return token string
-
-
+// Routes go here.
+func (s *HMACAuthServer) Routes() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /auth", s.AuthHandler)
+	mux.HandleFunc("GET /validate", s.ValidateTokenHandler)
+	return mux
 }
-
-func validateTokenHandler(w http.ResponseWriter, r *http.Request) {
-
-	// 1. Grab token string from header
-
-	authToken := r.Header.Get("Authorization")
-
-	if authToken == "" {
-		http.Error(w, "No Authorization header found", http.StatusUnauthorized)
-		return
-	}
-
-	// 2. Call validateToken function
-
-	valid, expired, err = validateTokenString()
-
-	// 3. Handle error. Otherwise, 200 OK
-
-
-}
-
-func refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
-
-}
-
 
 func createToken(
 	hmacSecret []byte,
