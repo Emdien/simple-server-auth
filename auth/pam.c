@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 
 
 // Rewrite of github.com/msteinert/pam implementation for learning purposes.
@@ -76,7 +77,7 @@ int pam_conv_call(
 
 // Create a PAM conversation with a matching conversation call that performs our desired logic
 // and uses the pointer of appdata_ptr to pass credentials.
-static struct pam_conv make_conv(void *appdata_ptr) {
+struct pam_conv make_conv(void *appdata_ptr) {
     struct pam_conv conv;
     conv.conv = pam_conv_call;
     conv.appdata_ptr = appdata_ptr;
