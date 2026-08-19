@@ -1,6 +1,5 @@
 #include "_cgo_export.h"
 #include <security/pam_appl.h>
-#include "pam.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -34,7 +33,7 @@ int pam_conv_call(
 
         // result.r0 holds the string msg, whereas r1 holds the status code.
 
-        struct goPAMConv_result result = goPAMConv(msg[i]->msg_style, (char *)msg[i]->msg, (uintptr_t)appdata_ptr);
+        struct goPAMConv_return result = goPAMConv(msg[i]->msg_style, (char *)msg[i]->msg, (uintptr_t)appdata_ptr);
         if (result.r1 != PAM_SUCCESS) {
             pam_error = true;
             break;
