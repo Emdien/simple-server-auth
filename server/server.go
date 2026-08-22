@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/Emdien/simple-server-auth/auth"
 )
 
 
@@ -19,7 +20,7 @@ type AuthRequest struct {
 }
 
 
-func New(hmacSecret []byte) *HMACAuthServer {
+func NewServer(hmacSecret []byte) *HMACAuthServer {
 	return &HMACAuthServer{hmacSecret: hmacSecret}
 }
 
@@ -36,6 +37,13 @@ func (s *HMACAuthServer) AuthHandler(w http.ResponseWriter, r *http.Request) {
 	// 2. Call PAM functions to auth
 
 	// TODO
+	_, err := auth.CheckCredentials("auth-service",authRq.Username, authRq.Password)
+
+	if err != nil {
+		msg := fmt.Sprintf("Invalid credentials: %s", err.Error())
+		http.Error(w, msg, http.StatusUnauthorized)
+		return
+	}
 
 	// 3. If auth successful, create a token
 

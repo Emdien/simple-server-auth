@@ -1,4 +1,4 @@
-package main
+package auth
 
 /*
 #cgo CFLAGS: -Wall -Wno-unused-variable -std=c99
@@ -28,6 +28,8 @@ import (
 	"runtime/cgo"
 	"sync/atomic"
 	"unsafe"
+	"errors"
+	"fmt"
 )
 
 // *************** PAM CONVERSATION *******************
@@ -97,9 +99,9 @@ func goPAMConv(s C.int, msg *C.char, c C.uintptr_t) (*C.char, C.int) {
 // Define the struct and transaction methods
 
 type Transaction struct  {
-	handle 		atomic.Pointer[unsafe.Pointer]
-	conv 		atomic.Pointer[*C.struct_pam_conv]
-	lastStatus	*atomic.Int32
+	handle 		*C.pam_handle_t
+	conv 		*C.struct_pam_conv
+	lastStatus	atomic.Int32
 	callback 	cgo.Handle
 }
 
@@ -107,7 +109,7 @@ type Transaction struct  {
 // Cleans up the PAM handle and deletes the callback function
 
 func (t *Transaction) End() error {
-	handle := t.handle.Swap(nil)
+	handle := atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(&t.handle)), nil)
 	if handle == nil {
 		return nil
 	}
@@ -119,7 +121,7 @@ func (t *Transaction) End() error {
 	// To be able to cast it to a pam_handle_t pointer, we:
 	// 1. Dereference handle with *handle
 	// 2. Cast it to a pointer of pam_handle_t with (*C.pam_handle_t)(...)
-	return t.handleStatus(C.pam_end((*C.pam_handle_t)(*handle), C.int(t.lastStatus.Load())))
+	return t.handleStatus(C.pam_end((*C.pam_handle_t) (handle), C.int(t.lastStatus.Load())))
 
 }
 
@@ -153,22 +155,96 @@ func StartTransactionFunc(service, user string, handler func(Style, string) (str
 func start_pam_transaction(service, user string, handler ConversationHandler) (*Transaction, error) {
 
 	transaction := &Transaction{
-		conv: atomic.Pointer[*C.struct_pam_conv]{},
+		conv: &C.struct_pam_conv{},
 		callback: cgo.NewHandle(handler),
 	}
 
-	C.init_conv(transaction.conv.Load(), C.uintptr_t(transaction.callback))
+	// Unsure if this dereferencing is correct
+	C.init_conv(transaction.conv, C.uintptr_t(transaction.callback))
+	c_service := C.CString(service)
+	defer C.free(unsafe.Pointer(c_service))
+
+	var c_user *C.char
+
+	if len(user) != 0 {
+		c_user = C.CString(user)
+		defer C.free(unsafe.Pointer(c_user))
+	}
+
+	var err error
+
+	err = transaction.handleStatus(C.pam_start(c_service, c_user, transaction.conv, &transaction.handle))
+
+	if err != nil {
+		var _ = transaction.End()
+		return nil, err
+	}
 
 	return transaction, nil
 
 
 }
 
-// ****************************************************
-// ******************* PAM ITEMS **********************
 
-// Define flags ? Maybe not. Try to pass pre-defined, hardcoded flags as they interests us
-// Additionally, only interested in Authenticate and AcctMgmt
-// Just in case: valid flags are Silent and DisallowNullAuthtok
+type Flags int
 
-// ****************************************************
+
+// Bitwise PAM flags. To pass multiple flags you pass them with an 'or' operator
+const (
+	Silent Flags = C.PAM_SILENT
+	DisallowNullAuthtok Flags = C.PAM_DISALLOW_NULL_AUTHTOK
+)
+
+
+func (t *Transaction) Authenticate(f Flags) error {
+	return t.handleStatus(C.pam_authenticate(t.handle, C.int(f)))
+}
+
+func (t *Transaction) AcctMgmt(f Flags) error {
+	return t.handleStatus(C.pam_acct_mgmt(t.handle, C.int(f)))
+}
+
+
+
+func CheckCredentials(service, username, password string) (bool, error) {
+	// Passing username to StartFunc means PAM already has PAM_USER set, so
+	// in practice most modules will only prompt for the password
+	// (PromptEchoOff). The other cases are handled defensively in case a
+	// module also asks for the username or emits info/error text.
+
+	tx, err := StartTransactionFunc(service, username, func(s Style, msg string) (string, error) {
+		switch s {
+		case PromptEchoOff:
+			return password, nil
+		case PromptEchoOn:
+			return username, nil
+		default:
+			return "", errors.New("unsupported PAM message style")
+		}
+	})
+	if err != nil {
+		return false, fmt.Errorf("pam start: %w", err)
+	}
+	defer func() {
+		if err := tx.End(); err != nil {
+			fmt.Printf("pam end: %v", err)
+		}
+	}()
+ 
+	// Verifies the password itself.
+	if err := tx.Authenticate(0); err != nil {
+		return false, fmt.Errorf("authenticate: %w", err)
+	}
+ 
+	// Verifies the account is usable (not locked, not expired, no time
+	// restrictions, etc.). Recommended in addition to Authenticate for a
+	// real login check.
+	if err := tx.AcctMgmt(0); err != nil {
+		return false, fmt.Errorf("account check: %w", err)
+	}
+ 
+	return true, nil
+}
+
+
+

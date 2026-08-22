@@ -16,7 +16,7 @@ func main() {
 	}
 
 
-	srv := server.New(hmacSecret)
+	srv := server.NewServer(hmacSecret)
     log.Fatal(http.ListenAndServe(":8088", srv.Routes()))
 	// 1. Define a server with the routes to auth and validate token
 

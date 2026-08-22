@@ -1,4 +1,4 @@
-package main
+package auth
 
 /*
 #include <security/pam_appl.h>
