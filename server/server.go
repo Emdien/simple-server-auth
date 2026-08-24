@@ -43,8 +43,6 @@ func (s *HMACAuthServer) AuthHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Call PAM functions to auth
-
-	// TODO
 	_, err := auth.CheckCredentials("auth-service",authRq.Username, authRq.Password)
 
 	if err != nil {
@@ -55,8 +53,8 @@ func (s *HMACAuthServer) AuthHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 3. If auth successful, create a token
 
-	//token, err := createToken(s.hmacSecret, authRq.Username, "localhost", time.Hour * 6)
-	token, err := createToken(s.hmacSecret, authRq.Username, "localhost", time.Duration(s.tokenDurationSeconds)*time.Second)
+	token, err := createToken(s.hmacSecret, authRq.Username, "localhost", 
+		time.Duration(s.tokenDurationSeconds)*time.Second+time.Duration(s.tokenDurationMinutes)*time.Minute+time.Duration(s.tokenDurationHour)*time.Hour)
 
 
 	if err != nil {
