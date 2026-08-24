@@ -12,6 +12,9 @@ import (
 
 type HMACAuthServer struct {
 	hmacSecret []byte
+	tokenDurationHour int
+	tokenDurationMinutes int
+	tokenDurationSeconds int
 }
 
 type AuthRequest struct {
@@ -20,8 +23,13 @@ type AuthRequest struct {
 }
 
 
-func NewServer(hmacSecret []byte) *HMACAuthServer {
-	return &HMACAuthServer{hmacSecret: hmacSecret}
+func NewServer(hmacSecret []byte, tokenDurationHour, tokenDurationMinutes, tokenDurationSeconds int ) *HMACAuthServer {
+	return &HMACAuthServer{
+		hmacSecret: hmacSecret,
+		tokenDurationHour: tokenDurationHour,
+		tokenDurationMinutes: tokenDurationMinutes,
+		tokenDurationSeconds: tokenDurationSeconds,
+	}
 }
 
 func (s *HMACAuthServer) AuthHandler(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +55,9 @@ func (s *HMACAuthServer) AuthHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 3. If auth successful, create a token
 
-	token, err := createToken(s.hmacSecret, authRq.Username, "localhost", time.Hour * 6)
+	//token, err := createToken(s.hmacSecret, authRq.Username, "localhost", time.Hour * 6)
+	token, err := createToken(s.hmacSecret, authRq.Username, "localhost", time.Duration(s.tokenDurationSeconds)*time.Second)
+
 
 	if err != nil {
 		msg := fmt.Sprintf("Error during token creation: %s", err.Error())
