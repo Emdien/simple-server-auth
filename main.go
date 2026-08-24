@@ -18,6 +18,7 @@ func main() {
 	secretPtr := flag.String("secret", "", "HMAC Secret to use in token creation. If none passed, it will create one in runtime. (Volatile)")
 
 	
+	flag.Parse()
 
 	var hmacSecret []byte
 	if *secretPtr != "" {
