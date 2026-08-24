@@ -7,6 +7,7 @@ import (
 	"time"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/Emdien/simple-server-auth/auth"
+	"log"
 )
 
 
@@ -24,6 +25,7 @@ type AuthRequest struct {
 
 
 func NewServer(hmacSecret []byte, tokenDurationHour, tokenDurationMinutes, tokenDurationSeconds int ) *HMACAuthServer {
+	log.Println("Starting server")
 	return &HMACAuthServer{
 		hmacSecret: hmacSecret,
 		tokenDurationHour: tokenDurationHour,
@@ -34,13 +36,16 @@ func NewServer(hmacSecret []byte, tokenDurationHour, tokenDurationMinutes, token
 
 func (s *HMACAuthServer) AuthHandler(w http.ResponseWriter, r *http.Request) {
 	// 1. Read body with Username, HashedPwd 
-
+	log.Println("Auth request received")
 	var authRq AuthRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&authRq); err != nil {
 		http.Error(w, "Invalid body", http.StatusBadRequest)
+		log.Println("[ERROR] Unable to parse body of request")
 		return
 	}
+
+	log.Printf("Username request: %s\n", authRq.Username)
 
 	// 2. Call PAM functions to auth
 	_, err := auth.CheckCredentials("auth-service",authRq.Username, authRq.Password)
@@ -50,6 +55,8 @@ func (s *HMACAuthServer) AuthHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, http.StatusUnauthorized)
 		return
 	}
+
+	log.Println("PAM auth successful")
 
 	// 3. If auth successful, create a token
 
@@ -68,11 +75,13 @@ func (s *HMACAuthServer) AuthHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK) //		This is default behaviour. But being explicit about it.
 	fmt.Fprintln(w, token)
 
+	log.Println("Auth successful")
+
 }
 
 func (s * HMACAuthServer) ValidateTokenHandler(w http.ResponseWriter, r *http.Request) {
 	// 1. Grab token string from header
-
+	log.Print("Validation request received")
 	authToken := r.Header.Get("Authorization")
 
 	if authToken == "" {
@@ -96,6 +105,7 @@ func (s * HMACAuthServer) ValidateTokenHandler(w http.ResponseWriter, r *http.Re
 	}
 	
 	w.WriteHeader(http.StatusOK)
+	log.Println("Token validated successfully")
 
 }
 
@@ -105,7 +115,7 @@ func (s * HMACAuthServer) ValidateTokenHandler(w http.ResponseWriter, r *http.Re
 // The password should be hashed and salted or something, should not be plain --- NVM, HTTPS duh.
 // This is the core handler of this service. It will rely on PAM functions to perform the auth.
 
-// 2. A token validator. Receives a token string in the body or in an auth header (check for both, prioritize the header)
+// 2. A token validator. Receives a token string in the body or in a	n auth header (check for both, prioritize the header)
 
 // 3. A token refresher? Will see
 
