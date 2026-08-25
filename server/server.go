@@ -2,12 +2,14 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
-	"github.com/golang-jwt/jwt/v5"
+
 	"github.com/Emdien/simple-server-auth/auth"
-	"log"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 
@@ -16,6 +18,10 @@ type HMACAuthServer struct {
 	tokenDurationHour int
 	tokenDurationMinutes int
 	tokenDurationSeconds int
+	refreshWindow int
+	sessionHours int
+	sessionMinutes int
+	sessionSeconds int
 }
 
 type AuthRequest struct {
@@ -24,13 +30,17 @@ type AuthRequest struct {
 }
 
 
-func NewServer(hmacSecret []byte, tokenDurationHour, tokenDurationMinutes, tokenDurationSeconds int ) *HMACAuthServer {
+func NewServer(hmacSecret []byte, tokenDurationHour, tokenDurationMinutes, tokenDurationSeconds, sessionHours, sessionMinutes, sessionSeconds, refreshWindow int ) *HMACAuthServer {
 	log.Println("Starting server")
 	return &HMACAuthServer{
 		hmacSecret: hmacSecret,
 		tokenDurationHour: tokenDurationHour,
 		tokenDurationMinutes: tokenDurationMinutes,
 		tokenDurationSeconds: tokenDurationSeconds,
+		refreshWindow: refreshWindow,
+		sessionHours: sessionHours,
+		sessionMinutes: sessionMinutes,
+		sessionSeconds: sessionSeconds,
 	}
 }
 
@@ -59,9 +69,8 @@ func (s *HMACAuthServer) AuthHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("PAM auth successful")
 
 	// 3. If auth successful, create a token
-
-	token, err := createToken(s.hmacSecret, authRq.Username, "localhost", 
-		time.Duration(s.tokenDurationSeconds)*time.Second+time.Duration(s.tokenDurationMinutes)*time.Minute+time.Duration(s.tokenDurationHour)*time.Hour)
+	exp := time.Duration(s.tokenDurationSeconds)*time.Second+time.Duration(s.tokenDurationMinutes)*time.Minute+time.Duration(s.tokenDurationHour)*time.Hour
+	token, err := createToken(s.hmacSecret, authRq.Username, "localhost", exp)
 
 
 	if err != nil {
@@ -73,6 +82,7 @@ func (s *HMACAuthServer) AuthHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Return token string
 	w.WriteHeader(http.StatusOK) //		This is default behaviour. But being explicit about it.
+	attachToken(w, token, exp)
 	fmt.Fprintln(w, token)
 
 	log.Println("Auth successful")
@@ -91,7 +101,7 @@ func (s * HMACAuthServer) ValidateTokenHandler(w http.ResponseWriter, r *http.Re
 
 	// 2. Call validateToken function
 
-	_, expired, err := validateTokenString(authToken, s.hmacSecret)
+	_, expired, err := validateTokenString(s, w, authToken, s.hmacSecret)
 
 	if err != nil {
 		msg := fmt.Sprintf("Token validation failed with error: %s", err.Error())
@@ -109,25 +119,6 @@ func (s * HMACAuthServer) ValidateTokenHandler(w http.ResponseWriter, r *http.Re
 
 }
 
-// Need to define the following handlers
-
-// 1. An auth handler that receives as a body the user and password
-// The password should be hashed and salted or something, should not be plain --- NVM, HTTPS duh.
-// This is the core handler of this service. It will rely on PAM functions to perform the auth.
-
-// 2. A token validator. Receives a token string in the body or in a	n auth header (check for both, prioritize the header)
-
-// 3. A token refresher? Will see
-
-
-// The idea is that any internal application will be hidden behind an NGINX or similar that will autoperform auth checks.
-// Apache -> NGINX -> Application (might be another NGINX depending on the Apps architecture) in our server
-// It might be a few too many redirections/proxies, however I don't wanna touch the public facing Apache
-// Another option would be to modify the NGINX or whichever API Gateway the different apps are using to point to this service automatically
-// But uhhhhhh will see.
-
-
-// Might be interesting to look into Traefik to see how it works, since it seems like it integrates well with Docker.
 
 // Routes go here.
 func (s *HMACAuthServer) Routes() *http.ServeMux {
@@ -144,11 +135,15 @@ func createToken(
 	exp time.Duration,
 ) (string, error) {
 
+
+	iat := time.Now()
+
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub": sub,
 		"iss": iss,
-		"exp": time.Now().Add(exp).Unix(),
-		"iat": time.Date(2015, 10, 10, 12, 0, 0, 0, time.UTC).Unix(),
+		"exp": iat.Add(exp).Unix(),
+		"iat": iat.Unix(),
+		"og_iat": iat.Unix(),
 	})
 
 	tokenString, err := token.SignedString(hmacSecret)
@@ -162,32 +157,94 @@ func createToken(
 }
 
 // Valid - Expired - Error
-func validateTokenString(tokenString string, hmacSecret []byte) (bool, bool, error) {
+func validateTokenString(s *HMACAuthServer, w http.ResponseWriter, tokenString string, hmacSecret []byte) (bool, bool, error) {
 
 	// Get expiration date at the beginning of function call. It should not matter but its small enough.
 	timeNow := time.Now()
 
-	// Currently we ignore the JWT token obtained from parsing it.
+	log.Println("Parsing token")
 
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
 		return hmacSecret, nil // Should this be different?
 	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 
 	if err != nil {
-		return false, false, err
+
+
+		switch {
+		case errors.Is(err, jwt.ErrTokenMalformed) || errors.Is(err, jwt.ErrSignatureInvalid):
+			return false, false, err
+
+		case errors.Is(err, jwt.ErrTokenExpired):
+			return false, true, nil
+		}
+
 	}
 
-	// We check its claims. In particular, check expiry date.
-	// In particular we check for expiration. If expired, not valid.
-	// Should return some sort of special case for this.
+	// We check its claims.
 
 	if claims, ok := token.Claims.(jwt.MapClaims); ok {
+
+		log.Println("Checking claims")
 		if expFloat, ok := claims["exp"].(float64); ok {
 			expiration := time.Unix(int64(expFloat), 0)
+
+			// Expiration check is performed at jwt.Parse
+
+			/* log.Printf("Expiration: %s\n", expiration.String())
 			if timeNow.After(expiration) {
 				// Expired token
+				log.Println("Expired")
 				return false, true, nil
+			} */
+
+			// Check for session duration, regardless of expiry
+			if ogIatFloat, ok := claims["og_iat"].(float64); ok {
+				sessionExp := time.Unix(int64(ogIatFloat), 0).Add(time.Duration(s.sessionSeconds)*time.Second+time.Duration(s.sessionMinutes)*time.Minute+time.Duration(s.sessionHours)*time.Hour)
+
+				if timeNow.After(sessionExp) {
+
+					log.Println("Session expired")
+					return false, true, nil
+				}
 			}
+
+			// Check for session. The goal is to refresh a token before it expires
+			// 1. Tokens have a 6h session limit by default ( add a server flag for it)
+			// 2. If a token is within the refresh window (a value defined with a flag, by default 5 minutes before exp)
+			// then refresh the token, creating a new token and updating iat and exp field, while maintaining og_iat etc
+			// 3. The token should be added in multiple places. As a header, as a cookie
+			// and in the case of /auth, in the body too.
+			rWindowAfter := expiration.Add(-time.Duration(s.refreshWindow)*time.Minute)
+
+			// I have checked that the token is neither expired nor outside of session
+			// I can now check if the token is in the refresh window.
+			// Need to refresh
+			if timeNow.After(rWindowAfter) {
+				
+				iat := time.Now()
+				exp := time.Duration(s.tokenDurationSeconds)*time.Second+time.Duration(s.tokenDurationMinutes)*time.Minute+time.Duration(s.tokenDurationHour)*time.Hour
+
+				refresh_token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+					"sub": claims["sub"],
+					"iss": claims["iss"],
+					"exp": iat.Add(exp).Unix(),
+					"iat": iat.Unix(),
+					"og_iat": claims["og_iat"],
+				})
+
+
+				tokenString, err := refresh_token.SignedString(hmacSecret)
+
+				if err != nil {
+					return false, false, err
+				}
+
+				attachToken(w, tokenString, exp)
+
+
+			}
+
 			// Valid token
 			return true, false, nil
 		}
@@ -198,6 +255,21 @@ func validateTokenString(tokenString string, hmacSecret []byte) (bool, bool, err
 	// Invalid token.
 	return false, false, fmt.Errorf("invalid token claims")
 
+}
+
+
+func attachToken(w http.ResponseWriter, token string, exp time.Duration)  {
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_token",
+		Value:    token,
+		Domain:   "localhost",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(exp),
+	})
 }
 
 
